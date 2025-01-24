@@ -1,0 +1,225 @@
+---
+title: "Extracting data from multiple spatiotemporal scales"
+author: "Celia Hein"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Goals
+
+In this notebook we will extract landscape data from two years and two spatial scales per year. This example is made to extract just two landscape variables over just two years and from two spatial scales. This is to keep the computational demand low for a teaching exercise, but it can easily be expanded to cover larger time periods, more spatial scales, or to run in parallel.\
+
+```{r, message=FALSE, warning=FALSE}
+library(terra)
+library(landscapemetrics)
+library(sf)
+library(dplyr)
+library(tmap)
+library(tmaptools)
+```
+
+### Loading, transforming, and visualizing the data
+
+Here we load in our landscape raster maps. These maps represent subsetted areas of Crop Inventory maps from Agriculture and AgriFood Canada from 2014 and 2015, taken from near Grande Prairie, Alberta, Canada. I already simplified and extracted their data to circular buffers made around 24 geographic sampling points so these maps should not take too long to load or analyze.
+
+```{r}
+map2014 <- terra::rast("./data/crop_inventory_2014_GrandePrairie_reclassified_cropped.tif")
+map2015 <- terra::rast("./data/crop_inventory_2015_GrandePrairie_reclassified_cropped.tif")
+
+names(map2014) <- "2014" # give each map an appropriate name
+names(map2015) <- "2015"
+
+map_stack <- c(map2014, map2015) # listing maps loaded with the terra package using the c() command automatically creates a "raster stack", which makes analyzing and visualizing the maps much easier
+
+map_stack
+```
+
+\
+Always check the levels or the "labels" of your maps
+
+```{r}
+levels(2014)
+levels(2015)
+#Looks good!
+```
+
+\
+Let's take a look
+
+```{r, message=FALSE, warning=FALSE}
+tmap_mode("view")
+
+tmap2014 = tm_shape(map2014) + tm_raster()+ tm_layout(legend.show = FALSE, title = "2014")
+tmap2015 = tm_shape(map2015) + tm_raster(title = "Landcover") +tm_layout(legend.show = TRUE, title = "2015")
+
+map_fig = tmap_arrange(tmap2014, tmap2015, ncol = 2)
+
+map_fig
+```
+
+\
+Now we can load in our geographic points, using the `sf` package to read in the shapefile. The data points are openly available from a published article by Kohler et al. (2020) about the composition of bee communities in the Alberta prairies.
+
+```{r}
+sites <- sf::st_read("./data/GrandPrairie_sites_reduced.shp") %>% 
+  mutate(plot_id=as.numeric(row.names(.))) # this new column will come in handy later
+
+head(sites)
+sites
+```
+
+\
+The coordinate reference system (crs) of the sites shapefile is different than that of the rasters, so we have to transform the crs of the sites to match our maps.
+
+```{r}
+# transform to utm coords so it matches the projection of the rasters
+crs_new<- st_crs(3857) #define new crs
+sites <- st_transform(sites, crs = crs_new) #transform crs of sites
+```
+
+\
+Now we should be able to see the points in the centers of the circular map areas.
+
+```{r, message=FALSE, warning=FALSE}
+tmap_mode("view")
+
+tmap2014 = 
+  tm_shape(map2014) + tm_raster()+ 
+  tm_layout(legend.show = FALSE, title = "2014")+
+  tm_shape(sites) + tm_dots()
+
+tmap2015 = tm_shape(map2015) + tm_raster(title = "Landcover")+
+  tm_layout(legend.show = TRUE, title = "2015")+
+  tm_shape(sites) + tm_dots()
+
+map_fig = tmap_arrange(tmap2014, tmap2015, ncol = 2)
+
+map_fig # Looks good!
+```
+
+### Extracting data
+
+Now that our data is loaded and properly formatted, we can begin extracting the data!\
+Today we are using the `landscapemetrics` package, which is compatible with `terra` and `sf` and has a handy function (`check_landscape`) to make sure our landscape maps are properly formatted for the package.
+
+```{r}
+check_landscape(map_stack) # looks good!
+```
+
+\
+We want to sample the landscape surrounding each of our sites, so let's do a little test run.\
+We using `sample_lsm` function to extract data from only the sample area of the landscape. We set the `landscape` argument to just map2014 for now. The `what` argument indicated what metric we're calculating, and I chose `"lsm_c_pland"`. This is defined as landscape metric (lsm) at the class level (c) called "pland", which stands for "proportion landscape", so this `"lsm_c_pland"` will calculate the proportion of each landcover type in the sample area. The `y` argument indicates where we want to sample, and here we chose just the first site. We indicate that we want to sample within a circular buffer by setting the `shape = "circle"` argument and the size of the circle, in this case 150 m.
+
+```{r}
+Radius = 150
+test2014 <- landscapemetrics::sample_lsm(landscape = map2014, 
+                                             what = "lsm_c_pland",
+                                             shape = "circle",
+                                             y = sites[1,], 
+                                             size = Radius)
+test2014
+sum(test2014$value) #these percents should sum to 100
+```
+
+\
+Around this site, within a radius of 150 m we have three landcover types: 109 = "Pasture/forages", 110 = "Pollen Only Crops", and "Urban/developed"\
+Note that the percentages are written to the value column and that plot_id indicates that it was the first site.\
+\
+Now let's do the same thing but on the raster stack, instead of just one map.
+
+```{r}
+Radius = 150
+test_stack <- landscapemetrics::sample_lsm(landscape = map_stack, 
+                                             what = "lsm_c_pland",
+                                             shape = "circle",
+                                             y = sites[1,], 
+                                             size = Radius)
+test_stack
+```
+
+\
+We see that we added two more rows of information, where layer = 2, indicated the second layer of the stack, or in this case the year 2015.\
+\
+Let's expand this to calculate another landscape variable at the same time: number of separate patches of each landcover type, which may be as small as a single pixel. We can do this by adding `"lsm_c_np"` to the `what` argument.
+
+```{r}
+Radius = 150
+test_stack <- landscapemetrics::sample_lsm(landscape = map_stack, 
+                                             what = c("lsm_c_pland", "lsm_c_np"),
+                                             shape = "circle",
+                                             y = sites[1,], 
+                                             size = Radius)
+test_stack
+```
+
+\
+And here we see that the new metric calculations where metric = "np".\
+Now let's expand our analysis to all sites, instead of just the first one. We can easily do that by setting `y = sites`
+
+```{r}
+Radius = 150
+test_stack <- landscapemetrics::sample_lsm(landscape = map_stack, 
+                                             what = c("lsm_c_pland", "lsm_c_np"),
+                                             shape = "circle",
+                                             y = sites, 
+                                             size = Radius)
+test_stack
+```
+
+\
+Now, let's extract this same information at two spatial scales instead of one using a simple `for` loop. First, we make Radius into a list and include the next radius size, which we set to 180 m. We then create an empty list to which we write the Results.\
+While this isn't the most efficient way to run this code, it is the most explicit for learning purposes. If you're running this on a limited or old laptop and it's a little slow, you can always reduce the number of sites you're analyzing. For example you can set `y = sites[1:5,]`
+
+```{r}
+Radius <- c(150, 180)
+
+Results <- list()
+
+for(r in 1:length(Radius)){
+  
+  res <- landscapemetrics::sample_lsm(landscape = map_stack, 
+                                             what = c("lsm_c_pland", "lsm_c_np"),
+                                             shape = "circle",
+                                             y = sites, 
+                                             size = Radius[r])
+  
+  #formatting the results to include only what we need
+  res <- res %>%
+  dplyr::select(plot_id, layer, level, class, metric, value) %>%
+  mutate(key = sites[plot_id,1], # write the site name to the results
+          buffer = Radius[[r]], #write the radius size to the results
+          year = ifelse(layer==1, 2014, 2015)) #write the year directly to the results
+  
+  Results[[r]] <- res
+}
+```
+
+\
+Let's take a look. We can see that each object listed in Results is a data frame with the results for each buffer size for all metrics for all years.
+
+```{r}
+head(Results[[1]])
+head(Results[[2]])
+```
+
+\
+Because we wrote out all the information needed to distinguish each site, year, and buffer size, we can simply combine these data sets.
+
+```{r}
+Results_df <- dplyr::bind_rows(Results)
+head(Results_df)
+```
+
+### Summary
+
+In this exercise, we learned to\
+- load, format, and visualize maps\
+- quickly extract multiple landscape variables from multiple spatiotemporal scales\
+- and to format the results into one easily accessible data frame
+
+### More tutorials and code available on my [website](https://celiahein.github.io/) and [GitHub](https://github.com/celiahein)
+
+### References
+
+Kohler, M., Sturm, A., Sheffield, C. S., Carlyle, C. N., & Manson, J. S. (2020). [Native bee communities vary across three prairie ecoregions due to land use, climate, sampling method and bee life history traits.](https://resjournals.onlinelibrary.wiley.com/doi/abs/10.1111/icad.12427?casa_token=c68N2qm619gAAAAA%3A1oBHVo6eGARfE6xIv53bXH79INivgLJb4OdwCZot2RW8Q8z-E1O3gOx9X4N67PNP-8A-wFKSHYW0MyU) Insect Conservation and Diversity, 13(6), 571-584.
