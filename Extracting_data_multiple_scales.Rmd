@@ -210,7 +210,46 @@ Because we wrote out all the information needed to distinguish each site, year, 
 Results_df <- dplyr::bind_rows(Results)
 head(Results_df)
 ```
+### Making our code more efficient
+While there's nothing technically wrong with `for` loops, they tend to be fairly slow, especially in R, which is not a particularly fast language. How we can make our code run much faster by converting our `for` loop into a function called by `lapply`. The only thing we need to change, is wherever we had `Radius[[r]]` in the loop, we replace it with `r` in the function. This is fairly similar to compressing a loop into a comprehension in Python. 
+```{r}
+Extract_metrics<- function(r){
+  res <- landscapemetrics::sample_lsm(landscape = map_stack, 
+                                             what = c("lsm_c_pland", "lsm_c_np"),
+                                             shape = "circle",
+                                             y = sites, 
+                                             size = r)
+  
+  #formatting the results to include only what we need
+  res <- res %>%
+      dplyr::select(plot_id, layer, level, class, metric, value) %>%
+      mutate(key = sites[plot_id,1], # write the site name to the results
+             buffer = r, #write the radius size to the results
+             year = ifelse(layer==1, 2014, 2015)) #write the year directly to the results
+  
+  return(res)
+}
+```
+\
+We can then APPLY our new function to our Radius LIST, using `lapply`, which stands for "list apply". We save our results to a new list, Results2, and bind it to a single data frame the same way we did before.
+```{r}
+Results2 <- lapply(Radius, FUN = Extract_metrics)
+Results_df2 <- dplyr::bind_rows(Results2)
+```
+\
+And we can test to see if our function gave us exactly the same results as our old loop, and we see that it does!
+```{r}
+identical(Results_df2, Results_df)
+```
+### Running our code in parallel
 
+If you're running on a Mac or Linux machine, making this code run in parallel is very easy. Simply set the number of cores you want to use using the `detectCores` function. If running code on a server, you may be required to keep one core in reserve, so I always subtract one core from the max. Then use the `mclapply` function from the `parallel` package, and indicate the cores.
+```{r}
+# nCores <- parallel::detectCores()-1
+# Results4 <- mclapply(Radius, FUN = Extract_metrics, mc.cores=nCores)
+# Results_df4 <- dplyr::bind_rows(Results4)
+# identical(Results4, Results3)
+```
 ### Summary
 
 In this exercise, we learned to\
